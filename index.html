@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Juego Multijugador</title>
+</head>
+<body>
+  <h1>Juego Multijugador</h1>
+  <h2></h2>
+  <button onclick="shoot()">Disparar</button>
+
+
+  <hr />
+
+  <h3>Jugadores</h3>
+    <ul id="players"></ul>
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    let idPlayer = new Date().getTime();
+    idPlayer = idPlayer.toString(36);
+
+    socket.emit('newPlayer', idPlayer);
+
+    const h2 = document.querySelector('h2');
+    h2.textContent = `ID del jugador: ${idPlayer}`;
+
+    function shoot() {
+      const coordinates = { x: 100, y: 200, idPlayer };
+      socket.emit('shoot', coordinates);
+    }
+
+    socket.on('shotFired', (coordinates) => {
+      console.log('Disparo recibido en:', coordinates);
+    });
+
+    socket.on('players', (players) => {
+      const playersList = document.querySelector('#players');
+      playersList.innerHTML = '';
+      players.forEach(player => {
+        const li = document.createElement('li');
+        li.textContent = player;
+        playersList.appendChild(li);
+      });
+    });
+  </script>
+</body>
+</html>
