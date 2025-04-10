@@ -1,50 +1,810 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Juego Multijugador</title>
-</head>
-<body>
-  <h1>Juego Multijugador</h1>
-  <h2></h2>
-  <button onclick="shoot()">Disparar</button>
-
-
-  <hr />
-
-  <h3>Jugadores</h3>
-    <ul id="players"></ul>
-  <script src="/socket.io/socket.io.js"></script>
-  <script>
-    const socket = io();
-
-    let idPlayer = new Date().getTime();
-    idPlayer = idPlayer.toString(36);
-
-    socket.emit('newPlayer', idPlayer);
-
-    const h2 = document.querySelector('h2');
-    h2.textContent = `ID del jugador: ${idPlayer}`;
-
-    function shoot() {
-      const coordinates = { x: 100, y: 200, idPlayer };
-      socket.emit('shoot', coordinates);
+  <title>Juego de Disparos Multijugador con WebRTC</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body {
+      font-family: 'Arial', sans-serif;
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #f0f0f0;
     }
 
-    socket.on('shotFired', (coordinates) => {
-      console.log('Disparo recibido en:', coordinates);
-    });
+    h1, h2, h3 {
+      color: #333;
+      text-align: center;
+    }
 
-    socket.on('players', (players) => {
-      const playersList = document.querySelector('#players');
-      playersList.innerHTML = '';
-      players.forEach(player => {
-        const li = document.createElement('li');
-        li.textContent = player;
-        playersList.appendChild(li);
+    #gameContainer {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-top: 20px;
+    }
+
+    #gameCanvas {
+      border: 3px solid #333;
+      background-color: #222;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+    }
+
+    .controls {
+      display: flex;
+      justify-content: center;
+      margin: 15px 0;
+      gap: 10px;
+    }
+
+    button {
+      padding: 10px 15px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-weight: bold;
+      transition: background-color 0.3s;
+    }
+
+    button:hover {
+      background-color: #45a049;
+    }
+
+    #shootBtn {
+      background-color: #f44336;
+    }
+
+    #shootBtn:hover {
+      background-color: #d32f2f;
+    }
+
+    #lobby {
+      margin-top: 20px;
+      padding: 15px;
+      background-color: white;
+      border-radius: 5px;
+      box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
+    }
+
+    #playersList {
+      list-style-type: none;
+      padding: 0;
+    }
+
+    #playersList li {
+      padding: 8px 12px;
+      margin: 5px 0;
+      background-color: #e9e9e9;
+      border-radius: 3px;
+    }
+
+    .stats {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 10px;
+      background-color: white;
+      padding: 10px;
+      border-radius: 5px;
+      box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Juego de Disparos Multijugador</h1>
+  <div id="playerInfo">
+    <h2 id="playerId"></h2>
+    <div id="setupScreen">
+      <button id="createGameBtn">Crear Nueva Partida</button>
+      <button id="joinGameBtn">Unirse a Partida</button>
+      <div id="joinForm" class="hidden">
+        <input type="text" id="gameCodeInput" placeholder="Código de la partida">
+        <button id="connectBtn">Conectar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="gameContainer" class="hidden">
+    <div class="stats">
+      <div>Jugadores: <span id="playerCount">1</span></div>
+      <div>Puntuación: <span id="score">0</span></div>
+      <div>Salud: <span id="health">100</span></div>
+    </div>
+    <canvas id="gameCanvas" width="800" height="500"></canvas>
+    <div class="controls">
+      <button id="leftBtn">←</button>
+      <button id="upBtn">↑</button>
+      <button id="downBtn">↓</button>
+      <button id="rightBtn">→</button>
+      <button id="shootBtn">DISPARAR</button>
+    </div>
+  </div>
+
+  <div id="lobby">
+    <h3>Jugadores Conectados</h3>
+    <div>Código de sala: <span id="gameCode"></span></div>
+    <ul id="playersList"></ul>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', async () => {
+      // Configuración de supabase
+      const SUPABASE_URL = 'https://jnrjrqgsegusbcfhmhrt.supabase.co';
+      const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpucmpycWdzZWd1c2JjZmhtaHJ0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQyNTY2MTEsImV4cCI6MjA1OTgzMjYxMX0.AsxEG8E-2-XKTsUQJYRGN5ivHU9UrhcU-aIF8VoLvAY';
+      const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+      // Variables del juego
+      const canvas = document.getElementById('gameCanvas');
+      const ctx = canvas.getContext('2d');
+      let playerId = generateId();
+      let gameId = null;
+      let isHost = false;
+      let players = {};
+      let bullets = [];
+      let score = 0;
+      let health = 100;
+      let connections = {};
+      let dataChannels = {};
+      
+      // Configuración de elementos DOM
+      const playerIdElement = document.getElementById('playerId');
+      const gameCodeElement = document.getElementById('gameCode');
+      const playersListElement = document.getElementById('playersList');
+      const playerCountElement = document.getElementById('playerCount');
+      const scoreElement = document.getElementById('score');
+      const healthElement = document.getElementById('health');
+      const setupScreen = document.getElementById('setupScreen');
+      const gameContainer = document.getElementById('gameContainer');
+      const joinForm = document.getElementById('joinForm');
+      
+      // Eventos de botones
+      document.getElementById('createGameBtn').addEventListener('click', createGame);
+      document.getElementById('joinGameBtn').addEventListener('click', () => {
+        joinForm.classList.toggle('hidden');
       });
+      document.getElementById('connectBtn').addEventListener('click', joinGame);
+      
+      document.getElementById('leftBtn').addEventListener('mousedown', () => startMoving('left'));
+      document.getElementById('leftBtn').addEventListener('mouseup', () => stopMoving('left'));
+      document.getElementById('rightBtn').addEventListener('mousedown', () => startMoving('right'));
+      document.getElementById('rightBtn').addEventListener('mouseup', () => stopMoving('right'));
+      document.getElementById('upBtn').addEventListener('mousedown', () => startMoving('up'));
+      document.getElementById('upBtn').addEventListener('mouseup', () => stopMoving('up'));
+      document.getElementById('downBtn').addEventListener('mousedown', () => startMoving('down'));
+      document.getElementById('downBtn').addEventListener('mouseup', () => stopMoving('down'));
+      document.getElementById('shootBtn').addEventListener('click', shoot);
+      
+      // Controles de teclado
+      window.addEventListener('keydown', handleKeyDown);
+      window.addEventListener('keyup', handleKeyUp);
+      
+      // Inicialización
+      playerIdElement.textContent = `Tu ID: ${playerId}`;
+      initializePlayer();
+      
+      // Generador de ID único
+      function generateId() {
+        return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+      }
+      
+      // Inicializar jugador local
+      function initializePlayer() {
+        players[playerId] = {
+          x: Math.random() * (canvas.width - 40),
+          y: Math.random() * (canvas.height - 40),
+          color: getRandomColor(),
+          width: 30,
+          height: 30,
+          movement: { left: false, right: false, up: false, down: false },
+          score: 0,
+          health: 100
+        };
+      }
+      
+      // Crear nueva partida
+      async function createGame() {
+        gameId = generateId();
+        isHost = true;
+        gameCodeElement.textContent = gameId;
+        setupScreen.classList.add('hidden');
+        gameContainer.classList.remove('hidden');
+        
+        // Crear registro del juego en Supabase
+        await supabaseClient.from('games').insert([{ 
+          id: gameId, 
+          host: playerId, 
+          created_at: new Date().toISOString() 
+        }]);
+        
+        // Suscribirse al canal de señalización
+        subscribeToSignaling();
+        
+        // Iniciar bucle del juego
+        gameLoop();
+      }
+      
+      // Unirse a partida existente
+      async function joinGame() {
+        const gameCodeInput = document.getElementById('gameCodeInput').value.trim();
+        if (!gameCodeInput) {
+          alert('Por favor, introduce un código de partida válido');
+          return;
+        }
+        
+        gameId = gameCodeInput;
+        gameCodeElement.textContent = gameId;
+        setupScreen.classList.add('hidden');
+        gameContainer.classList.remove('hidden');
+        
+        // Suscribirse al canal de señalización
+        subscribeToSignaling();
+        
+        // Anunciar presencia a través de supabaseClient
+        await supabaseClient.from('signaling').insert([{
+          type: 'new_player',
+          game_id: gameId,
+          from_player: playerId,
+          data: {
+            player: players[playerId]
+          }
+        }]);
+        
+        // Iniciar bucle del juego
+        gameLoop();
+      }
+      
+      // Suscribirse al canal de señalización en supabaseClient
+      function subscribeToSignaling() {
+        supabaseClient
+          .channel(`game-${gameId}`)
+          .on('postgres_changes', { 
+            event: 'INSERT', 
+            schema: 'public', 
+            table: 'signaling',
+            filter: `game_id=eq.${gameId}`
+          }, handleSignalingMessage)
+          .subscribe();
+      }
+      
+      // Manejar mensajes de señalización
+      async function handleSignalingMessage(payload) {
+        const message = payload.new;
+        
+        // Ignorar mensajes propios
+        if (message.from_player === playerId) return;
+        
+        switch (message.type) {
+          case 'new_player':
+            // Nuevo jugador se une
+            const newPlayerId = message.from_player;
+            players[newPlayerId] = message.data.player;
+            updatePlayersList();
+            playerCountElement.textContent = Object.keys(players).length;
+            
+            // Si somos el host, enviar estado actual del juego al nuevo jugador
+            if (isHost) {
+              await supabaseClient.from('signaling').insert([{
+                type: 'game_state',
+                game_id: gameId,
+                from_player: playerId,
+                to_player: newPlayerId,
+                data: {
+                  players,
+                  bullets
+                }
+              }]);
+            }
+            
+            // Iniciar conexión WebRTC con el nuevo jugador
+            createPeerConnection(newPlayerId);
+            break;
+            
+          case 'game_state':
+            // Actualizar estado del juego
+            if (message.to_player === playerId) {
+              const remoteState = message.data;
+              
+              // Preservar la información de nuestro propio jugador
+              const localPlayer = players[playerId];
+              
+              // Actualizar con estado remoto
+              players = remoteState.players;
+              bullets = remoteState.bullets;
+              
+              // Restaurar nuestro propio jugador
+              players[playerId] = localPlayer;
+              
+              updatePlayersList();
+              playerCountElement.textContent = Object.keys(players).length;
+            }
+            break;
+            
+          case 'offer':
+            // Recibir oferta WebRTC
+            if (message.to_player === playerId) {
+              const remotePeerId = message.from_player;
+              await handleWebRTCOffer(remotePeerId, message.data);
+            }
+            break;
+            
+          case 'answer':
+            // Recibir respuesta WebRTC
+            if (message.to_player === playerId) {
+              const remotePeerId = message.from_player;
+              await handleWebRTCAnswer(remotePeerId, message.data);
+            }
+            break;
+            
+          case 'ice_candidate':
+            // Recibir candidato ICE
+            if (message.to_player === playerId) {
+              const remotePeerId = message.from_player;
+              await handleICECandidate(remotePeerId, message.data);
+            }
+            break;
+        }
+      }
+      
+      // Crear conexión WebRTC con otro jugador
+      function createPeerConnection(remotePeerId) {
+        // Configuración de STUN/TURN servers para atravesar NATs
+        const config = {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+          ]
+        };
+        
+        const peerConnection = new RTCPeerConnection(config);
+        connections[remotePeerId] = peerConnection;
+        
+        // Crear canal de datos
+        const dataChannel = peerConnection.createDataChannel(`game-${gameId}`);
+        setupDataChannel(dataChannel, remotePeerId);
+        
+        // Manejar ICE candidates
+        peerConnection.onicecandidate = async (event) => {
+          if (event.candidate) {
+            await supabaseClient.from('signaling').insert([{
+              type: 'ice_candidate',
+              game_id: gameId,
+              from_player: playerId,
+              to_player: remotePeerId,
+              data: event.candidate
+            }]);
+          }
+        };
+        
+        // Manejar canales de datos entrantes
+        peerConnection.ondatachannel = (event) => {
+          setupDataChannel(event.channel, remotePeerId);
+        };
+        
+        // Iniciar oferta si somos el host o tenemos un ID "mayor"
+        if (isHost || playerId > remotePeerId) {
+          createOffer(peerConnection, remotePeerId);
+        }
+        
+        return peerConnection;
+      }
+      
+      // Configurar canal de datos
+      function setupDataChannel(dataChannel, remotePeerId) {
+        dataChannels[remotePeerId] = dataChannel;
+        
+        dataChannel.onopen = () => {
+          console.log(`Conexión establecida con ${remotePeerId}`);
+        };
+        
+        dataChannel.onclose = () => {
+          console.log(`Conexión cerrada con ${remotePeerId}`);
+          removePlayer(remotePeerId);
+        };
+        
+        dataChannel.onerror = (error) => {
+          console.error(`Error en la conexión con ${remotePeerId}:`, error);
+        };
+        
+        dataChannel.onmessage = (event) => {
+          const message = JSON.parse(event.data);
+          handleGameMessage(message, remotePeerId);
+        };
+      }
+      
+      // Crear oferta WebRTC
+      async function createOffer(peerConnection, remotePeerId) {
+        try {
+          const offer = await peerConnection.createOffer();
+          await peerConnection.setLocalDescription(offer);
+          
+          await supabaseClient.from('signaling').insert([{
+            type: 'offer',
+            game_id: gameId,
+            from_player: playerId,
+            to_player: remotePeerId,
+            data: offer
+          }]);
+        } catch (error) {
+          console.error('Error al crear oferta:', error);
+        }
+      }
+      
+      // Manejar oferta WebRTC recibida
+      async function handleWebRTCOffer(remotePeerId, offer) {
+        let peerConnection = connections[remotePeerId];
+        
+        if (!peerConnection) {
+          peerConnection = createPeerConnection(remotePeerId);
+        }
+        
+        try {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+          const answer = await peerConnection.createAnswer();
+          await peerConnection.setLocalDescription(answer);
+          
+          await supabaseClient.from('signaling').insert([{
+            type: 'answer',
+            game_id: gameId,
+            from_player: playerId,
+            to_player: remotePeerId,
+            data: answer
+          }]);
+        } catch (error) {
+          console.error('Error al manejar oferta:', error);
+        }
+      }
+      
+      // Manejar respuesta WebRTC recibida
+      async function handleWebRTCAnswer(remotePeerId, answer) {
+        const peerConnection = connections[remotePeerId];
+        
+        if (peerConnection) {
+          try {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+          } catch (error) {
+            console.error('Error al manejar respuesta:', error);
+          }
+        }
+      }
+      
+      // Manejar candidato ICE recibido
+      async function handleICECandidate(remotePeerId, candidate) {
+        const peerConnection = connections[remotePeerId];
+        
+        if (peerConnection) {
+          try {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (error) {
+            console.error('Error al agregar candidato ICE:', error);
+          }
+        }
+      }
+      
+      // Manejar mensajes del juego recibidos a través de WebRTC
+      function handleGameMessage(message, fromPlayerId) {
+        switch (message.type) {
+          case 'player_update':
+            // Actualizar posición y estado del jugador
+            if (players[fromPlayerId]) {
+              players[fromPlayerId] = message.data;
+            }
+            break;
+            
+          case 'new_bullet':
+            // Nuevo disparo
+            bullets.push(message.data);
+            break;
+            
+          case 'hit':
+            // Impacto recibido
+            if (message.data.target === playerId) {
+              health -= 10;
+              health = Math.max(0, health);
+              healthElement.textContent = health;
+              
+              if (health <= 0) {
+                respawnPlayer();
+              }
+            }
+            break;
+            
+          case 'remove_bullet':
+            // Eliminar bala
+            const bulletIndex = bullets.findIndex(b => 
+              b.id === message.data.bulletId &&
+              b.playerId === message.data.playerId
+            );
+            
+            if (bulletIndex !== -1) {
+              bullets.splice(bulletIndex, 1);
+            }
+            break;
+        }
+      }
+      
+      // Enviar mensaje a todos los jugadores conectados
+      function broadcastGameMessage(message) {
+        Object.values(dataChannels).forEach(channel => {
+          if (channel.readyState === 'open') {
+            channel.send(JSON.stringify(message));
+          }
+        });
+      }
+      
+      // Actualizar lista de jugadores en el DOM
+      function updatePlayersList() {
+        playersListElement.innerHTML = '';
+        
+        Object.entries(players).forEach(([id, player]) => {
+          const playerItem = document.createElement('li');
+          playerItem.style.color = player.color;
+          playerItem.textContent = id === playerId ? `${id} (Tú)` : id;
+          playersListElement.appendChild(playerItem);
+        });
+      }
+      
+      // Controles de movimiento
+      function startMoving(direction) {
+        if (players[playerId]) {
+          players[playerId].movement[direction] = true;
+        }
+      }
+      
+      function stopMoving(direction) {
+        if (players[playerId]) {
+          players[playerId].movement[direction] = false;
+        }
+      }
+      
+      // Manejo de teclado
+      function handleKeyDown(e) {
+        if (!players[playerId]) return;
+        
+        switch (e.key) {
+          case 'ArrowLeft':
+          case 'a':
+            players[playerId].movement.left = true;
+            break;
+          case 'ArrowRight':
+          case 'd':
+            players[playerId].movement.right = true;
+            break;
+          case 'ArrowUp':
+          case 'w':
+            players[playerId].movement.up = true;
+            break;
+          case 'ArrowDown':
+          case 's':
+            players[playerId].movement.down = true;
+            break;
+          case ' ':
+            shoot();
+            break;
+        }
+      }
+      
+      function handleKeyUp(e) {
+        if (!players[playerId]) return;
+        
+        switch (e.key) {
+          case 'ArrowLeft':
+          case 'a':
+            players[playerId].movement.left = false;
+            break;
+          case 'ArrowRight':
+          case 'd':
+            players[playerId].movement.right = false;
+            break;
+          case 'ArrowUp':
+          case 'w':
+            players[playerId].movement.up = false;
+            break;
+          case 'ArrowDown':
+          case 's':
+            players[playerId].movement.down = false;
+            break;
+        }
+      }
+      
+      // Disparar
+      function shoot() {
+        if (!players[playerId] || health <= 0) return;
+        
+        const bulletSpeed = 7;
+        const bulletId = generateId();
+        const bullet = {
+          id: bulletId,
+          playerId: playerId,
+          x: players[playerId].x + players[playerId].width / 2,
+          y: players[playerId].y + players[playerId].height / 2,
+          radius: 5,
+          color: players[playerId].color,
+          speedX: bulletSpeed,
+          speedY: 0
+        };
+        
+        bullets.push(bullet);
+        
+        // Notificar a otros jugadores
+        broadcastGameMessage({
+          type: 'new_bullet',
+          data: bullet
+        });
+      }
+      
+      // Reaparecer después de morir
+      function respawnPlayer() {
+        health = 100;
+        healthElement.textContent = health;
+        
+        players[playerId].x = Math.random() * (canvas.width - 40);
+        players[playerId].y = Math.random() * (canvas.height - 40);
+        
+        // Notificar a otros jugadores
+        broadcastGameMessage({
+          type: 'player_update',
+          data: players[playerId]
+        });
+      }
+      
+      // Eliminar jugador desconectado
+      function removePlayer(id) {
+        if (players[id]) {
+          delete players[id];
+          updatePlayersList();
+          playerCountElement.textContent = Object.keys(players).length;
+        }
+        
+        if (connections[id]) {
+          connections[id].close();
+          delete connections[id];
+        }
+        
+        if (dataChannels[id]) {
+          delete dataChannels[id];
+        }
+      }
+      
+      // Generar color aleatorio
+      function getRandomColor() {
+        const colors = ['#FF5733', '#33FF57', '#3357FF', '#F3FF33', '#FF33F3', '#33FFF3'];
+        return colors[Math.floor(Math.random() * colors.length)];
+      }
+      
+      // Bucle principal del juego
+      function gameLoop() {
+        update();
+        render();
+        requestAnimationFrame(gameLoop);
+      }
+      
+      // Actualizar estado del juego
+      function update() {
+        // Actualizar posición del jugador local
+        const player = players[playerId];
+        if (player && health > 0) {
+          const speed = 4;
+          
+          if (player.movement.left) player.x -= speed;
+          if (player.movement.right) player.x += speed;
+          if (player.movement.up) player.y -= speed;
+          if (player.movement.down) player.y += speed;
+          
+          // Mantener dentro de los límites
+          player.x = Math.max(0, Math.min(canvas.width - player.width, player.x));
+          player.y = Math.max(0, Math.min(canvas.height - player.height, player.y));
+          
+          // Notificar a otros jugadores
+          broadcastGameMessage({
+            type: 'player_update',
+            data: player
+          });
+        }
+        
+        // Actualizar balas
+        bullets.forEach((bullet, index) => {
+          bullet.x += bullet.speedX;
+          bullet.y += bullet.speedY;
+          
+          // Comprobar colisiones con jugadores
+          Object.entries(players).forEach(([id, player]) => {
+            // No colisionar con el jugador que disparó
+            if (id !== bullet.playerId && health > 0) {
+              if (
+                bullet.x > player.x &&
+                bullet.x < player.x + player.width &&
+                bullet.y > player.y &&
+                bullet.y < player.y + player.height
+              ) {
+                // Colisión detectada
+                if (bullet.playerId === playerId) {
+                  // Notificar al jugador afectado
+                  broadcastGameMessage({
+                    type: 'hit',
+                    data: {
+                      bulletId: bullet.id,
+                      target: id
+                    }
+                  });
+                  
+                  // Aumentar puntuación
+                  score += 10;
+                  scoreElement.textContent = score;
+                }
+                
+                // Eliminar bala
+                bullets.splice(index, 1);
+                
+                // Notificar a todos los jugadores
+                broadcastGameMessage({
+                  type: 'remove_bullet',
+                  data: {
+                    bulletId: bullet.id,
+                    playerId: bullet.playerId
+                  }
+                });
+              }
+            }
+          });
+          
+          // Eliminar balas fuera de los límites
+          if (
+            bullet.x < 0 ||
+            bullet.x > canvas.width ||
+            bullet.y < 0 ||
+            bullet.y > canvas.height
+          ) {
+            bullets.splice(index, 1);
+            
+            // Notificar a todos los jugadores
+            broadcastGameMessage({
+              type: 'remove_bullet',
+              data: {
+                bulletId: bullet.id,
+                playerId: bullet.playerId
+              }
+            });
+          }
+        });
+      }
+      
+      // Renderizar juego
+      function render() {
+        // Limpiar canvas
+        ctx.fillStyle = '#222';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Dibujar jugadores
+        Object.entries(players).forEach(([id, player]) => {
+          ctx.fillStyle = player.color;
+          ctx.fillRect(player.x, player.y, player.width, player.height);
+          
+          // Dibujar nombre de jugador
+          ctx.fillStyle = 'white';
+          ctx.font = '12px Arial';
+          ctx.fillText(id === playerId ? 'Tú' : id, player.x, player.y - 10);
+        });
+        
+        // Dibujar balas
+        bullets.forEach(bullet => {
+          ctx.beginPath();
+          ctx.arc(bullet.x, bullet.y, bullet.radius, 0, Math.PI * 2);
+          ctx.fillStyle = bullet.color;
+          ctx.fill();
+          ctx.closePath();
+        });
+      }
     });
   </script>
 </body>
+
 </html>
